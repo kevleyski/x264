@@ -1,7 +1,7 @@
 /*****************************************************************************
  * rdo.c: rate-distortion optimization
  *****************************************************************************
- * Copyright (C) 2005-2018 x264 project
+ * Copyright (C) 2005-2022 x264 project
  *
  * Authors: Loren Merritt <lorenm@u.washington.edu>
  *          Fiona Glaser <fiona@x264.com>
@@ -141,7 +141,8 @@ static inline int ssd_plane( x264_t *h, int size, int p, int x, int y )
             int dc = h->pixf.sad[size]( fdec, FDEC_STRIDE, (pixel*)x264_zero, 0 ) >> 1;
             satd = abs(h->pixf.satd[size]( fdec, FDEC_STRIDE, (pixel*)x264_zero, 0 ) - dc - cached_satd( h, size, x, y ));
         }
-        satd = (satd * h->mb.i_psy_rd * h->mb.i_psy_rd_lambda + 128) >> 8;
+        int64_t tmp = ((int64_t)satd * h->mb.i_psy_rd * h->mb.i_psy_rd_lambda + 128) >> 8;
+        satd = X264_MIN( tmp, COST_MAX );
     }
     return h->pixf.ssd[size](fenc, FENC_STRIDE, fdec, FDEC_STRIDE) + satd;
 }
@@ -374,8 +375,8 @@ static uint64_t rd_cost_chroma( x264_t *h, int i_lambda2, int i_mode, int b_dct 
  * Trellis RD quantization
  ****************************************************************************/
 
-#define TRELLIS_SCORE_MAX -1LL // negative marks the node as invalid
-#define TRELLIS_SCORE_BIAS 1LL<<60; // bias so that all valid scores are positive, even after negative contributions from psy
+#define TRELLIS_SCORE_MAX  (~0ULL) // marks the node as invalid
+#define TRELLIS_SCORE_BIAS (1ULL<<60) // bias so that all valid scores are positive, even after negative contributions from psy
 #define CABAC_SIZE_BITS 8
 #define LAMBDA_BITS 4
 
@@ -470,7 +471,7 @@ int trellis_dc_shortcut( int sign_coef, int quant_coef, int unquant_mf, int coef
 
         /* Optimize rounding for DC coefficients in DC-only luma 4x4/8x8 blocks. */
         int d = sign_coef - ((SIGN(unquant_abs_level, sign_coef) + 8)&~15);
-        uint64_t score = (uint64_t)d*d * coef_weight;
+        uint64_t score = (int64_t)d*d * coef_weight;
 
         /* code the proposed level, and count how much entropy it would take */
         if( abs_level )
@@ -704,9 +705,13 @@ int quant_trellis_cabac( x264_t *h, dctcoef *dct,
         return !!dct[0];
     }
 
-#if HAVE_MMX && ARCH_X86_64 && !defined( __MACH__ )
+#if HAVE_MMX && ARCH_X86_64
+    uint64_t level_state0;
+    memcpy( &level_state0, cabac_state, sizeof(uint64_t) );
+    uint16_t level_state1;
+    memcpy( &level_state1, cabac_state+8, sizeof(uint16_t) );
 #define TRELLIS_ARGS unquant_mf, zigzag, lambda2, last_nnz, orig_coefs, quant_coefs, dct,\
-                     cabac_state_sig, cabac_state_last, M64(cabac_state), M16(cabac_state+8)
+                     cabac_state_sig, cabac_state_last, level_state0, level_state1
     if( num_coefs == 16 && !dc )
         if( b_chroma || !h->mb.i_psy_trellis )
             return h->quantf.trellis_cabac_4x4( TRELLIS_ARGS, b_ac );
@@ -729,11 +734,11 @@ int quant_trellis_cabac( x264_t *h, dctcoef *dct,
     trellis_level_t level_tree[64*8*2];
     int levels_used = 1;
     /* init trellis */
-    trellis_node_t nodes[2][8];
+    trellis_node_t nodes[2][8] = {0};
     trellis_node_t *nodes_cur = nodes[0];
     trellis_node_t *nodes_prev = nodes[1];
     trellis_node_t *bnode;
-    for( int j = 1; j < 4; j++ )
+    for( int j = 1; j < 8; j++ )
         nodes_cur[j].score = TRELLIS_SCORE_MAX;
     nodes_cur[0].score = TRELLIS_SCORE_BIAS;
     nodes_cur[0].level_idx = 0;
@@ -763,7 +768,7 @@ int quant_trellis_cabac( x264_t *h, dctcoef *dct,
         if( !quant_coefs[i] )\
         {\
             /* no need to calculate ssd of 0s: it's the same in all nodes.\
-             * no need to modify level_tree for ctx=0: it starts with an infinite loop of 0s.
+             * no need to modify level_tree for ctx=0: it starts with an infinite loop of 0s.\
              * subtracting from one score is equivalent to adding to the rest. */\
             if( !ctx_hi )\
             {\
@@ -820,17 +825,18 @@ int quant_trellis_cabac( x264_t *h, dctcoef *dct,
                 int predicted_coef = orig_coef - sign_coef;\
                 int psy_value = abs(unquant_abs_level + SIGN(predicted_coef, sign_coef));\
                 int psy_weight = coef_weight1[zigzag[i]] * h->mb.i_psy_trellis;\
-                ssd1[k] = (uint64_t)d*d * coef_weight2[zigzag[i]] - psy_weight * psy_value;\
+                int64_t tmp = (int64_t)d*d * coef_weight2[zigzag[i]] - (int64_t)psy_weight * psy_value;\
+                ssd1[k] = (uint64_t)tmp;\
             }\
             else\
             /* FIXME: for i16x16 dc is this weight optimal? */\
-                ssd1[k] = (uint64_t)d*d * (dc?256:coef_weight2[zigzag[i]]);\
+                ssd1[k] = (int64_t)d*d * (dc?256:coef_weight2[zigzag[i]]);\
             ssd0[k] = ssd1[k];\
             if( !i && !dc && !ctx_hi )\
             {\
                 /* Optimize rounding for DC coefficients in DC-only luma 4x4/8x8 blocks. */\
                 d = sign_coef - ((SIGN(unquant_abs_level, sign_coef) + 8)&~15);\
-                ssd0[k] = (uint64_t)d*d * coef_weight2[zigzag[i]];\
+                ssd0[k] = (int64_t)d*d * coef_weight2[zigzag[i]];\
             }\
         }\
 \
@@ -921,7 +927,7 @@ int quant_trellis_cavlc( x264_t *h, dctcoef *dct,
     ALIGNED_ARRAY_16( dctcoef, coefs,[16] );
     const uint32_t *coef_weight1 = b_8x8 ? x264_dct8_weight_tab : x264_dct4_weight_tab;
     const uint32_t *coef_weight2 = b_8x8 ? x264_dct8_weight2_tab : x264_dct4_weight2_tab;
-    int delta_distortion[16];
+    int64_t delta_distortion[16];
     int64_t score = 1ULL<<62;
     int i, j;
     const int f = 1<<15;
@@ -948,7 +954,7 @@ int quant_trellis_cavlc( x264_t *h, dctcoef *dct,
 
     /* Find last non-zero coefficient. */
     for( i = end; i >= start; i -= step )
-        if( (unsigned)(dct[zigzag[i]] * (dc?quant_mf[0]>>1:quant_mf[zigzag[i]]) + f-1) >= 2*f )
+        if( abs(dct[zigzag[i]]) * (dc?quant_mf[0]>>1:quant_mf[zigzag[i]]) >= f )
             break;
 
     if( i < start )
@@ -981,7 +987,7 @@ int quant_trellis_cavlc( x264_t *h, dctcoef *dct,
             int unquant0 = (((dc?unquant_mf[0]<<1:unquant_mf[zigzag[j]]) * (nearest_quant-1) + 128) >> 8);
             int d1 = abs_coef - unquant1;
             int d0 = abs_coef - unquant0;
-            delta_distortion[i] = (d0*d0 - d1*d1) * (dc?256:coef_weight2[zigzag[j]]);
+            delta_distortion[i] = (int64_t)(d0*d0 - d1*d1) * (dc?256:coef_weight2[zigzag[j]]);
 
             /* Psy trellis: bias in favor of higher AC coefficients in the reconstructed frame. */
             if( h->mb.i_psy_trellis && j && !dc && !b_chroma )
@@ -1019,7 +1025,7 @@ int quant_trellis_cavlc( x264_t *h, dctcoef *dct,
     while( 1 )
     {
         int64_t iter_score = score;
-        int iter_distortion_delta = 0;
+        int64_t iter_distortion_delta = 0;
         int iter_coef = -1;
         int iter_mask = coef_mask;
         int iter_round = round_mask;
@@ -1034,7 +1040,7 @@ int quant_trellis_cavlc( x264_t *h, dctcoef *dct,
             int old_coef = coefs[i];
             int new_coef = quant_coefs[round_change][i];
             int cur_mask = (coef_mask&~(1 << i))|(!!new_coef << i);
-            int cur_distortion_delta = delta_distortion[i] * (round_change ? -1 : 1);
+            int64_t cur_distortion_delta = delta_distortion[i] * (round_change ? -1 : 1);
             int64_t cur_score = cur_distortion_delta;
             coefs[i] = new_coef;
 

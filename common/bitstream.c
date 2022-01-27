@@ -1,7 +1,7 @@
 /*****************************************************************************
  * bitstream.c: bitstream writing
  *****************************************************************************
- * Copyright (C) 2003-2018 x264 project
+ * Copyright (C) 2003-2022 x264 project
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Fiona Glaser <fiona@x264.com>
@@ -45,7 +45,7 @@ static uint8_t *nal_escape_c( uint8_t *dst, uint8_t *src, uint8_t *end )
 #if HAVE_ARMV6
 #include "arm/bitstream.h"
 #endif
-#if ARCH_AARCH64
+#if HAVE_AARCH64
 #include "aarch64/bitstream.h"
 #endif
 
@@ -92,10 +92,10 @@ void x264_nal_encode( x264_t *h, uint8_t *dst, x264_nal_t *nal )
     {
         /* Size doesn't include the size of the header we're writing now. */
         int chunk_size = size - 4;
-        orig_dst[0] = chunk_size >> 24;
-        orig_dst[1] = chunk_size >> 16;
-        orig_dst[2] = chunk_size >> 8;
-        orig_dst[3] = chunk_size >> 0;
+        orig_dst[0] = (uint8_t)(chunk_size >> 24);
+        orig_dst[1] = (uint8_t)(chunk_size >> 16);
+        orig_dst[2] = (uint8_t)(chunk_size >> 8);
+        orig_dst[3] = (uint8_t)(chunk_size >> 0);
     }
 
     nal->i_payload = size;
@@ -103,13 +103,13 @@ void x264_nal_encode( x264_t *h, uint8_t *dst, x264_nal_t *nal )
     x264_emms();
 }
 
-void x264_bitstream_init( int cpu, x264_bitstream_function_t *pf )
+void x264_bitstream_init( uint32_t cpu, x264_bitstream_function_t *pf )
 {
     memset( pf, 0, sizeof(*pf) );
 
     pf->nal_escape = nal_escape_c;
 #if HAVE_MMX
-#if ARCH_X86_64 && !defined( __MACH__ )
+#if ARCH_X86_64
     pf->cabac_block_residual_internal = x264_cabac_block_residual_internal_sse2;
     pf->cabac_block_residual_rd_internal = x264_cabac_block_residual_rd_internal_sse2;
     pf->cabac_block_residual_8x8_rd_internal = x264_cabac_block_residual_8x8_rd_internal_sse2;
@@ -122,7 +122,7 @@ void x264_bitstream_init( int cpu, x264_bitstream_function_t *pf )
         if( cpu&X264_CPU_SSE2_IS_FAST )
             pf->nal_escape = x264_nal_escape_sse2;
     }
-#if ARCH_X86_64 && !defined( __MACH__ )
+#if ARCH_X86_64
     if( cpu&X264_CPU_LZCNT )
     {
         pf->cabac_block_residual_internal = x264_cabac_block_residual_internal_lzcnt;
@@ -159,7 +159,7 @@ void x264_bitstream_init( int cpu, x264_bitstream_function_t *pf )
     if( cpu&X264_CPU_NEON )
         pf->nal_escape = x264_nal_escape_neon;
 #endif
-#if ARCH_AARCH64
+#if HAVE_AARCH64
     if( cpu&X264_CPU_NEON )
         pf->nal_escape = x264_nal_escape_neon;
 #endif

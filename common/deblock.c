@@ -1,7 +1,7 @@
 /*****************************************************************************
  * deblock.c: deblocking
  *****************************************************************************
- * Copyright (C) 2003-2018 x264 project
+ * Copyright (C) 2003-2022 x264 project
  *
  * Authors: Laurent Aimar <fenrir@via.ecp.fr>
  *          Loren Merritt <lorenm@u.washington.edu>
@@ -102,7 +102,7 @@ static ALWAYS_INLINE void deblock_edge_luma_c( pixel *pix, intptr_t xstride, int
             tc++;
         }
 
-        delta = x264_clip3( (((q0 - p0 ) << 2) + (p1 - q1) + 4) >> 3, -tc, tc );
+        delta = x264_clip3( (((q0 - p0 ) * 4) + (p1 - q1) + 4) >> 3, -tc, tc );
         pix[-1*xstride] = x264_clip_pixel( p0 + delta );    /* p0' */
         pix[ 0*xstride] = x264_clip_pixel( q0 - delta );    /* q0' */
     }
@@ -143,7 +143,7 @@ static ALWAYS_INLINE void deblock_edge_chroma_c( pixel *pix, intptr_t xstride, i
 
     if( abs( p0 - q0 ) < alpha && abs( p1 - p0 ) < beta && abs( q1 - q0 ) < beta )
     {
-        int delta = x264_clip3( (((q0 - p0 ) << 2) + (p1 - q1) + 4) >> 3, -tc, tc );
+        int delta = x264_clip3( (((q0 - p0 ) * 4) + (p1 - q1) + 4) >> 3, -tc, tc );
         pix[-1*xstride] = x264_clip_pixel( p0 + delta );    /* p0' */
         pix[ 0*xstride] = x264_clip_pixel( q0 - delta );    /* q0' */
     }
@@ -315,10 +315,10 @@ static ALWAYS_INLINE void deblock_edge( x264_t *h, pixel *pix, intptr_t i_stride
     if( !M32(bS) || !alpha || !beta )
         return;
 
-    tc[0] = (tc0_table(index_a)[bS[0]] << (BIT_DEPTH-8)) + b_chroma;
-    tc[1] = (tc0_table(index_a)[bS[1]] << (BIT_DEPTH-8)) + b_chroma;
-    tc[2] = (tc0_table(index_a)[bS[2]] << (BIT_DEPTH-8)) + b_chroma;
-    tc[3] = (tc0_table(index_a)[bS[3]] << (BIT_DEPTH-8)) + b_chroma;
+    tc[0] = (tc0_table(index_a)[bS[0]] * (1 << (BIT_DEPTH-8))) + b_chroma;
+    tc[1] = (tc0_table(index_a)[bS[1]] * (1 << (BIT_DEPTH-8))) + b_chroma;
+    tc[2] = (tc0_table(index_a)[bS[2]] * (1 << (BIT_DEPTH-8))) + b_chroma;
+    tc[3] = (tc0_table(index_a)[bS[3]] * (1 << (BIT_DEPTH-8))) + b_chroma;
 
     pf_inter( pix, i_stride, alpha, beta, tc );
 }
@@ -399,12 +399,13 @@ void x264_frame_deblock_row( x264_t *h, int mb_y )
         uint8_t (*bs)[8][4] = h->deblock_strength[mb_y&1][h->param.b_sliced_threads?mb_xy:mb_x];
 
         pixel *pixy = h->fdec->plane[0] + 16*mb_y*stridey  + 16*mb_x;
-        pixel *pixuv = h->fdec->plane[1] + chroma_height*mb_y*strideuv + 16*mb_x;
+        pixel *pixuv = CHROMA_FORMAT ? h->fdec->plane[1] + chroma_height*mb_y*strideuv + 16*mb_x : NULL;
 
         if( mb_y & MB_INTERLACED )
         {
             pixy -= 15*stridey;
-            pixuv -= (chroma_height-1)*strideuv;
+            if( CHROMA_FORMAT )
+                pixuv -= (chroma_height-1)*strideuv;
         }
 
         int stride2y  = stridey << MB_INTERLACED;
@@ -654,11 +655,11 @@ void x264_macroblock_deblock( x264_t *h )
     } while( 0 )
 
     if( !transform_8x8 ) FILTER( 0, 1 );
-                         FILTER( 0, 2 );
+    FILTER( 0, 2 );
     if( !transform_8x8 ) FILTER( 0, 3 );
 
     if( !transform_8x8 ) FILTER( 1, 1 );
-                         FILTER( 1, 2 );
+    FILTER( 1, 2 );
     if( !transform_8x8 ) FILTER( 1, 3 );
 
     #undef FILTER
@@ -667,20 +668,20 @@ void x264_macroblock_deblock( x264_t *h )
 #if HAVE_MMX
 #include "x86/deblock.h"
 #endif
-#if ARCH_PPC
+#if HAVE_ALTIVEC
 #include "ppc/deblock.h"
 #endif
 #if HAVE_ARMV6
 #include "arm/deblock.h"
 #endif
-#if ARCH_AARCH64
+#if HAVE_AARCH64
 #include "aarch64/deblock.h"
 #endif
 #if HAVE_MSA
 #include "mips/deblock.h"
 #endif
 
-void x264_deblock_init( int cpu, x264_deblock_function_t *pf, int b_mbaff )
+void x264_deblock_init( uint32_t cpu, x264_deblock_function_t *pf, int b_mbaff )
 {
     pf->deblock_luma[1] = deblock_v_luma_c;
     pf->deblock_luma[0] = deblock_h_luma_c;
@@ -782,7 +783,7 @@ void x264_deblock_init( int cpu, x264_deblock_function_t *pf, int b_mbaff )
     }
 #endif // HAVE_ALTIVEC
 
-#if HAVE_ARMV6 || ARCH_AARCH64
+#if HAVE_ARMV6 || HAVE_AARCH64
     if( cpu&X264_CPU_NEON )
     {
         pf->deblock_luma[1] = x264_deblock_v_luma_neon;

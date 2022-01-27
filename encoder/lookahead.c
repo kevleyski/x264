@@ -1,7 +1,7 @@
 /*****************************************************************************
  * lookahead.c: high-level lookahead functions
  *****************************************************************************
- * Copyright (C) 2010-2018 Avail Media and x264 project
+ * Copyright (C) 2010-2022 Avail Media and x264 project
  *
  * Authors: Michael Kazmier <mkazmier@availmedia.com>
  *          Alex Giladi <agiladi@availmedia.com>
@@ -87,11 +87,16 @@ static void lookahead_slicetype_decide( x264_t *h )
     x264_pthread_mutex_unlock( &h->lookahead->ofbuf.mutex );
 }
 
-static void *lookahead_thread_internal( x264_t *h )
+REALIGN_STACK static void *lookahead_thread( x264_t *h )
 {
-    while( !h->lookahead->b_exit_thread )
+    while( 1 )
     {
         x264_pthread_mutex_lock( &h->lookahead->ifbuf.mutex );
+        if( h->lookahead->b_exit_thread )
+        {
+            x264_pthread_mutex_unlock( &h->lookahead->ifbuf.mutex );
+            break;
+        }
         x264_pthread_mutex_lock( &h->lookahead->next.mutex );
         int shift = X264_MIN( h->lookahead->next.i_max_size - h->lookahead->next.i_size, h->lookahead->ifbuf.i_size );
         lookahead_shift( &h->lookahead->next, &h->lookahead->ifbuf, shift );
@@ -122,10 +127,6 @@ static void *lookahead_thread_internal( x264_t *h )
     return NULL;
 }
 
-static void *lookahead_thread( x264_t *h )
-{
-    return (void*)x264_stack_align( lookahead_thread_internal, h );
-}
 #endif
 
 int x264_lookahead_init( x264_t *h, int i_slicetype_length )

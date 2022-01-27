@@ -1,7 +1,7 @@
 /*****************************************************************************
  * slicetype-cl.c: OpenCL slicetype decision code (lowres lookahead)
  *****************************************************************************
- * Copyright (C) 2012-2018 x264 project
+ * Copyright (C) 2012-2022 x264 project
  *
  * Authors: Steve Borho <sborho@multicorewareinc.com>
  *
@@ -101,8 +101,8 @@ int x264_opencl_lowres_init( x264_t *h, x264_frame_t *fenc, int lambda )
     if( !h->opencl.lowres_mv_costs )
     {
         /* Allocate shared memory buffers */
-        int width = h->mb.i_mb_width * 8 * sizeof(pixel);
-        int height = h->mb.i_mb_height * 8 * sizeof(pixel);
+        int width = h->mb.i_mb_width * 8 * SIZEOF_PIXEL;
+        int height = h->mb.i_mb_height * 8 * SIZEOF_PIXEL;
 
         cl_image_format pixel_format;
         pixel_format.image_channel_order = CL_R;
@@ -135,8 +135,8 @@ int x264_opencl_lowres_init( x264_t *h, x264_frame_t *fenc, int lambda )
     if( !fenc->opencl.intra_cost )
     {
         /* Allocate per-frame buffers */
-        int width = h->mb.i_mb_width * 8 * sizeof(pixel);
-        int height = h->mb.i_mb_height * 8 * sizeof(pixel);
+        int width = h->mb.i_mb_width * 8 * SIZEOF_PIXEL;
+        int height = h->mb.i_mb_height * 8 * SIZEOF_PIXEL;
 
         cl_image_format pixel_format;
         pixel_format.image_channel_order = CL_R;
@@ -283,7 +283,7 @@ int x264_opencl_lowres_init( x264_t *h, x264_frame_t *fenc, int lambda )
     return 0;
 }
 
-/* This function was tested emprically on a number of AMD and NV GPUs.  Making a
+/* This function was tested empirically on a number of AMD and NV GPUs.  Making a
  * function which returns perfect launch dimensions is impossible; some
  * applications will have self-tuning code to try many possible variables and
  * measure the runtime.  Here we simply make an educated guess based on what we
